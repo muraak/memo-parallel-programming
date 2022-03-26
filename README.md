@@ -10,11 +10,53 @@
 
 ### バリアの種類（ARMv8）
 
-#### データメモリバリア
+#### データメモリバリア(DMB)
 
-#### データ同期バリア
+##### DMB SY
 
-#### 命令バリア
+バリア以前のメモリアクセス命令は、バリア命令以降のすべてのメモリアクセス命令が実行される前に完了する。
+メモリアクセス命令以外の命令には効果をもたない。
+
+##### DMB ST
+
+バリア以前のすべてのストア命令は、バリア命令以降のすべてのストア命令が実行される前に完了する。
+メモリアクセス命令以外の命令には効果をもたない。
+
+##### DMB LD
+
+バリア以前のすべてのロード命令は、バリア命令以降のすべてのメモリアクセス命令が実行される前に完了する。
+メモリアクセス命令以外の命令には効果をもたない。
+
+#### データ同期バリア(DSB)
+##### DSB SY
+
+バリア以前のメモリアクセス命令は、バリアの完了時に完了する。
+バリア命令以降に配置されたすべての命令は、バリアが完了するまで実行されない。
+
+##### DSB ST
+
+バリア以前のすべてのストア命令は、バリアの完了時に完了する。
+バリア命令以降に配置されたすべての命令は、バリアが完了するまで実行されない。
+
+##### DSB LD
+
+バリア以前のすべてのロード命令は、バリアの完了時に完了する。
+バリア命令以降に配置されたすべての命令は、バリアが完了するまで実行されない。
+
+#### DMB/DSBのその他のオプション
+
+なお、以下のようにオプションを変更すると、上記の3つオプションに加えて、バリアの作用を及ぼすメモリアクセス先（共有ドメイン）を限定することができる。
+
+- `SY`(全システム) -> `OSH`(Outer Sharableドメイン) -> `ISH`(Inner Sharableドメイン) -> `NSH`(Non-sharableドメイン)
+- `ST`(全システム) -> `OSHST`(Outer Sharableドメイン) -> `ISHST`(Inner Sharableドメイン) -> `NSHST`(Non-sharableドメイン)
+- `LD`(全システム) -> `OSHLD`(Outer Sharableドメイン) -> `ISHLD`(Inner Sharableドメイン) -> `NSHLD`(Non-sharableドメイン)
+
+各共有ドメインの定義イメージを以下に引用する（[参考元](https://developer.arm.com/documentation/100941/0100/Memory-attributes)）：
+
+![img](https://documentation-service.arm.com/static/5efa1dbedbdee951c1ccded0?token=)
+
+
+#### 命令バリア(ISB)
 
 バリアの挿入位置以前の命令による、システム制御レジスタへのアクセスおよびアクセスによる副作用が全て完了し、挿入位置以降の命令から観測できることを保証する。
 さらに、バリアの挿入位置以降の命令によるシステム制御レジスタへのアクセスおよびアクセスによる副作用は、バリアの挿入位置以前には発生しないことを保証する。
@@ -34,6 +76,8 @@ ISB // 命令バリア
 
 #### 参考
 
+1. https://developer.arm.com/documentation/dui0489/c
+1. https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/DSB--Data-Synchronization-Barrier-?lang=en
 1. https://github.com/Broadcom/arm64-linux/blob/master/Documentation/memory-barriers.txt
 
 ### C/C++でのバリアの使い方
