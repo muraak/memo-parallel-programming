@@ -74,11 +74,110 @@ ISB // 命令バリア
 命令D
 ```
 
+#### LinuxでのArmv8バリアの対応付け
+
 #### 参考
 
 1. https://developer.arm.com/documentation/dui0489/c
 1. https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/DSB--Data-Synchronization-Barrier-?lang=en
 1. https://github.com/Broadcom/arm64-linux/blob/master/Documentation/memory-barriers.txt
+
+### バリアのユースケース
+
+#### データメモリバリアのユースケース
+
+##### コア間共有データの更新をメモリ（フラグ）を使って通知する
+
+あるコアAが更新し、もう一方のコアBが参照する共有データがあり、データがCPU命令によって１度に更新できないサイズである場合、すべてのデータの更新完了をメモリ上のフラグやカウンタを使って通知する方法が考えられる。この場合、コアAにおいて、データの更新（ライト操作）とフラグの更新（ライト操作）は順序どおり実行されなければならないので、データの更新直後にライトメモリバリアが必要である。また、コアBにおいてもフラグの参照（リード操作）とデータの参照（リード操作）が順序どおり実行されなければならないので、データの参照直後にリードメモリバリアが必要である。以下にこの場合の疑似コードを示す：
+
+```
+コアA                          コアB
+共有データ[0] = 更新データ0    if(更新フラグ == true) then
+共有データ[1] = 更新データ1         リードメモリバリア()
+...                                 バッファ[0] = 共有データ[0] 
+共有データ[n] = 更新データn         バッファ[1] = 共有データ[1]
+ライトメモリバリア()                ...
+更新フラグ = true                   バッファ[n] = 共有データ[n]
+                                    受信データを使った処理（バッファ）
+                                endif
+```
+
+コード例）
+
+参照元：https://elixir.bootlin.com/linux/latest/source/net/ipv4/tcp.c#L4342
+
+- 前記疑似コードのコアAにあたる処理
+
+```c
+static void __tcp_alloc_md5sig_pool(void)
+{
+	struct crypto_ahash *hash;
+	int cpu;
+
+	hash = crypto_alloc_ahash("md5", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(hash))
+		return;
+
+    // 共有データの更新
+    for_each_possible_cpu(cpu) {
+		...省略（知りたいときは参照元をみて！）
+	}
+	/* before setting tcp_md5sig_pool_populated, we must commit all writes
+	 * to memory. See smp_rmb() in tcp_get_md5sig_pool()
+	 */
+	smp_wmb(); // ライトメモリバリア
+	tcp_md5sig_pool_populated = true;  // フラグの更新
+}
+```
+
+- 前記疑似コードのコアBにあたる処理
+
+```c
+struct tcp_md5sig_pool *tcp_get_md5sig_pool(void)
+{
+	local_bh_disable();
+
+	if (tcp_md5sig_pool_populated) { // フラグの参照
+		/* coupled with smp_wmb() in __tcp_alloc_md5sig_pool() */
+		smp_rmb(); // リードメモリバリア
+		return this_cpu_ptr(&tcp_md5sig_pool); // 共有データを使用した処理
+	}
+	local_bh_enable();
+	return NULL;
+}
+```
+
+##### その他の例
+
+例）
+
+以下の例では、リストデータへの`node`の挿入（`prev->next = node`操作）前に、ライトデータメモリバリアによって、`node->prev`の更新が完了することを保証し、リスト上の要素の`->prev`が常にリスト上の前の要素をさすようにしている。もし、ライトメモリバリアを挿入しない場合、`node`の挿入時点で`node->prev`が不定なメモリアドレスをさす場合があり、この時点でリストを走査する処理は不正なアドレスを参照する危険性がある。
+
+参照元：https://elixir.bootlin.com/linux/latest/source/kernel/locking/osq_lock.c#L124
+
+```c
+bool osq_lock(struct optimistic_spin_queue *lock)
+{
+    ...
+	node->prev = prev; // ①バリア前に完了することが保証されている
+
+	/*
+	 * osq_lock()			unqueue
+	 *
+	 * node->prev = prev		osq_wait_next()
+	 * WMB				MB
+	 * prev->next = node		next->prev = prev // unqueue-C
+	 *
+	 * Here 'node->prev' and 'next->prev' are the same variable and we need
+	 * to ensure these stores happen in-order to avoid corrupting the list.
+	 */
+	smp_wmb();
+
+	WRITE_ONCE(prev->next, node); // ②バリア後（つまり①の書込み完了後）にライトされることが保証されている
+    ...
+}
+```
+
 
 ### C/C++でのバリアの使い方
 
