@@ -102,7 +102,7 @@ ISB // 命令バリア
                                endif
 ```
 
-コード例）
+例）
 
 参照元：https://elixir.bootlin.com/linux/latest/source/net/ipv4/tcp.c#L4342
 
@@ -178,6 +178,57 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 }
 ```
 
+#### データ同期バリアのユースケース
+
+##### コア間通知割込みでデータの更新を通知する
+
+コアAからコアBに何らかの要求データを送信する場合、コアBで共有メモリの要求データを設定し、コア間割込み通知を行うことで、コアBの割込みやサーバタスク（要求が来た時だけ起床するタスク）で受信処理を行う方法が考えられる。この場合、コアAにおけるデータの送信（ライト操作）と割込み発行（任意の命令）は順序どおりに実行され、コアBで割込みまたはタスクが起動した時点で要求データがすべて設定された状態になることを保証する必要がある。このとき、割込み発行はメモリアクセスとは限らない（アーキテクチャや割込みコントローラに依る）ため、ライト操作後に（ライト）データ同期バリアを設置する必要がある。以下に疑似コードを示す：
+
+```
+コアA                           コアB
+共有データ[0] = 要求データ0     コア間割込みにより割込みハンドラまたはタスク起動
+...                             要求データ受信処理(共有データ)
+共有データ[n] = 要求データn
+ライトデータ同期バリア()
+コア間割込み通知発行()
+```
+
+> NOTE: ライトデータ同期バリアとコア間割込み通知は、割込みドライバや相当のミドルウエアの通知発行APIの内部でセットで実行されることがほとんどである（アーキテクチャ依存なので）。したがって、アプリケーションコードでバリアが必要なケースはあまりない。
+
+例）
+
+参照元：https://elixir.bootlin.com/linux/latest/source/drivers/irqchip/irq-gic-v3.c#L1214
+参照元（類似）：https://elixir.bootlin.com/arm-trusted-firmware/latest/source/drivers/arm/gic/v3/gicv3_main.c#L1092
+
+- 前記コアAに相当する処理（SGI（コア間割込み）発行はシステムレジスタ操作命令により発行するのでメモリバリアでなくデータ同期バリアである必要がある）
+
+```
+static void gic_ipi_send_mask(struct irq_data *d, const struct cpumask *mask)
+{
+	int cpu;
+
+	if (WARN_ON(d->hwirq >= 16))
+		return;
+
+	/*
+	 * Ensure that stores to Normal memory are visible to the
+	 * other CPUs before issuing the IPI.
+	 */
+	wmb(); // ライトデータ同期バリア
+
+    // コア間割込み発行
+	for_each_cpu(cpu, mask) {
+		u64 cluster_id = MPIDR_TO_SGI_CLUSTER_ID(cpu_logical_map(cpu));
+		u16 tlist;
+
+		tlist = gic_compute_target_list(&cpu, mask, cluster_id);
+		gic_send_sgi(cluster_id, tlist, d->hwirq);
+	}
+
+	/* Force the above writes to ICC_SGI1R_EL1 to be executed */
+	isb();
+}
+```
 
 ### C/C++でのバリアの使い方
 
